@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "cf:deploy:note": "node -e \"console.log('Prepare Cloudflare deployment by setting REMOVE_BG_API_KEY and using your preferred Next.js-on-Cloudflare adapter/runtime.')\""
   },
   "dependencies": {
     "next": "16.2.1",
