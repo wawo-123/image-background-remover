@@ -7,6 +7,8 @@ A lightweight MVP for the keyword **image background remover** built with **Next
 - TypeScript
 - Tailwind CSS
 - Remove.bg API
+- OpenNext for Cloudflare
+- Wrangler
 
 ## Features in this MVP
 - Single image upload (JPG / PNG / WEBP)
@@ -42,20 +44,43 @@ Required variable:
 REMOVE_BG_API_KEY=your_remove_bg_api_key_here
 ```
 
-## Cloudflare deployment prep
-This repository is now prepared at the application level for a Cloudflare deployment path:
+## Cloudflare deployment
+This repository is now prepared for a Cloudflare deployment path using **OpenNext for Cloudflare**.
 
-- no persistent upload storage in the MVP flow
-- server route reads `REMOVE_BG_API_KEY` from environment variables
-- UI and API are kept simple for adapter/runtime migration later
+### Installed tooling
+- `@opennextjs/cloudflare`
+- `wrangler`
 
-A helper note script is included:
+### Added files
+- `wrangler.jsonc`
+- `open-next.config.ts`
+- `.dev.vars.example`
 
+### Available scripts
 ```bash
-npm run cf:deploy:note
+npm run cf:build
+npm run cf:preview
+npm run cf:deploy
 ```
 
-When you move to Cloudflare, the remaining work is mainly choosing the exact Next.js-on-Cloudflare deployment adapter/runtime and wiring the environment variable in the target platform.
+### Before first deploy
+1. Log in to Cloudflare:
+   ```bash
+   npx wrangler auth login
+   ```
+2. Set your production env var in Cloudflare for the worker:
+   - `REMOVE_BG_API_KEY`
+3. (Optional) Create a local `.dev.vars` from `.dev.vars.example` for Wrangler local preview.
+
+### Local Cloudflare preview
+```bash
+npm run cf:preview
+```
+
+### Deploy
+```bash
+npm run cf:deploy
+```
 
 ## Notes
 - The current MVP does not persist uploaded images.
