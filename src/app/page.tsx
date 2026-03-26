@@ -294,98 +294,198 @@ function findMaskBBox(mask: Uint8ClampedArray, width: number, height: number, th
   return { minX, minY, maxX, maxY };
 }
 
-function fillMaskedRegion(
-  sourceData: Uint8ClampedArray,
-  maskData: Uint8ClampedArray,
-  width: number,
-  height: number
-) {
-  const result = new Uint8ClampedArray(sourceData);
-  const masked = new Uint8Array(width * height);
+async function createMaskBlob(maskCanvas: HTMLCanvasElement) {
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = maskCanvas.width;
+  exportCanvas.height = maskCanvas.height;
+  const ctx = exportCanvas.getContext("2d");
+  const sourceCtx = maskCanvas.getContext("2d");
+  if (!ctx || !sourceCtx) throw new Error("Mask 生成失败");
 
-  for (let i = 0; i < width * height; i += 1) {
-    masked[i] = maskData[i * 4 + 3] > 20 || maskData[i * 4] > 20 ? 1 : 0;
+  const data = sourceCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const out = ctx.createImageData(maskCanvas.width, maskCanvas.height);
+
+  for (let i = 0; i < data.data.length; i += 4) {
+    const active = data.data[i + 3] > 10 || data.data[i + 1] > 10;
+    const v = active ? 255 : 0;
+    out.data[i] = v;
+    out.data[i + 1] = v;
+    out.data[i + 2] = v;
+    out.data[i + 3] = 255;
   }
 
-  const dirs = [
-    [-1, 0],
-    [1, 0],
-    [0, -1],
-    [0, 1],
-    [-1, -1],
-    [1, -1],
-    [-1, 1],
-    [1, 1],
-  ];
+  ctx.putImageData(out, 0, 0);
+  return await new Promise<Blob>((resolve, reject) => {
+    exportCanvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Mask 导出失败"))), "image/png");
+  });
+}
 
-  let changed = true;
-  let safety = 0;
+let openCvPromise: Promise<any> | null = null;
 
-  while (changed && safety < width + height) {
-    changed = false;
-    safety += 1;
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const idx = y * width + x;
-        if (!masked[idx]) continue;
+async function loadOpenCv() {
+  if (typeof window === "undefined") throw new Error("浏览器环境不可用");
+  const existing = (window as any).cv;
+  if (existing?.inpaint) return existing;
 
-        let r = 0,
-          g = 0,
-          b = 0,
-          count = 0;
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          const nidx = ny * width + nx;
-          if (masked[nidx]) continue;
-          const o = nidx * 4;
-          r += result[o];
-          g += result[o + 1];
-          b += result[o + 2];
-          count += 1;
+  if (!openCvPromise) {
+    openCvPromise = new Promise((resolve, reject) => {
+      const w = window as any;
+
+      const finish = () => {
+        const cv = w.cv;
+        if (cv?.inpaint) {
+          resolve(cv);
+          return;
         }
-        if (count > 0) {
-          const o = idx * 4;
-          result[o] = Math.round(r / count);
-          result[o + 1] = Math.round(g / count);
-          result[o + 2] = Math.round(b / count);
-          result[o + 3] = 255;
-          masked[idx] = 0;
-          changed = true;
+        if (cv) {
+          cv.onRuntimeInitialized = () => resolve(cv);
+          return;
         }
+        reject(new Error("OpenCV 初始化失败"));
+      };
+
+      const existingScript = document.querySelector('script[data-opencv="true"]') as HTMLScriptElement | null;
+      if (existingScript) {
+        existingScript.addEventListener("load", finish, { once: true });
+        existingScript.addEventListener("error", () => reject(new Error("OpenCV 加载失败")), { once: true });
+        return;
       }
-    }
+
+      const script = document.createElement("script");
+      script.src = "https://docs.opencv.org/4.x/opencv.js";
+      script.async = true;
+      script.defer = true;
+      script.dataset.opencv = "true";
+      script.onload = finish;
+      script.onerror = () => reject(new Error("OpenCV 加载失败"));
+      document.body.appendChild(script);
+    });
   }
 
-  // light smoothing passes
-  for (let pass = 0; pass < 2; pass += 1) {
-    const snapshot = new Uint8ClampedArray(result);
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        const o = (y * width + x) * 4;
-        let r = 0,
-          g = 0,
-          b = 0,
-          c = 0;
-        for (let dy = -1; dy <= 1; dy += 1) {
-          for (let dx = -1; dx <= 1; dx += 1) {
-            const oo = ((y + dy) * width + (x + dx)) * 4;
-            r += snapshot[oo];
-            g += snapshot[oo + 1];
-            b += snapshot[oo + 2];
-            c += 1;
-          }
-        }
-        result[o] = Math.round(r / c);
-        result[o + 1] = Math.round(g / c);
-        result[o + 2] = Math.round(b / c);
-        result[o + 3] = 255;
-      }
-    }
-  }
+  return await openCvPromise;
+}
 
-  return result;
+async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanvasElement) {
+  const maskCtx = maskCanvas.getContext("2d");
+  if (!maskCtx) throw new Error("画布初始化失败");
+
+  const maskImage = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const bbox = findMaskBBox(maskImage.data, maskCanvas.width, maskCanvas.height);
+  if (!bbox) throw new Error("请先涂抹要消除的区域");
+
+  const pad = 48;
+  const x = Math.max(0, bbox.minX - pad);
+  const y = Math.max(0, bbox.minY - pad);
+  const w = Math.min(baseCanvas.width - x, bbox.maxX - bbox.minX + 1 + pad * 2);
+  const h = Math.min(baseCanvas.height - y, bbox.maxY - bbox.minY + 1 + pad * 2);
+
+  const maxSide = 960;
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const sw = Math.max(1, Math.round(w * scale));
+  const sh = Math.max(1, Math.round(h * scale));
+
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = sw;
+  srcCanvas.height = sh;
+  const srcCtx = srcCanvas.getContext("2d");
+  if (!srcCtx) throw new Error("临时画布失败");
+  srcCtx.drawImage(baseCanvas, x, y, w, h, 0, 0, sw, sh);
+
+  const regionMaskCanvas = document.createElement("canvas");
+  regionMaskCanvas.width = sw;
+  regionMaskCanvas.height = sh;
+  const regionMaskCtx = regionMaskCanvas.getContext("2d");
+  if (!regionMaskCtx) throw new Error("临时画布失败");
+  regionMaskCtx.drawImage(maskCanvas, x, y, w, h, 0, 0, sw, sh);
+
+  const binaryMaskCanvas = document.createElement("canvas");
+  binaryMaskCanvas.width = sw;
+  binaryMaskCanvas.height = sh;
+  const binaryCtx = binaryMaskCanvas.getContext("2d");
+  if (!binaryCtx) throw new Error("临时画布失败");
+  const rawMask = regionMaskCtx.getImageData(0, 0, sw, sh);
+  const binaryMask = binaryCtx.createImageData(sw, sh);
+  for (let i = 0; i < rawMask.data.length; i += 4) {
+    const active = rawMask.data[i + 3] > 10 || rawMask.data[i + 1] > 10;
+    const v = active ? 255 : 0;
+    binaryMask.data[i] = v;
+    binaryMask.data[i + 1] = v;
+    binaryMask.data[i + 2] = v;
+    binaryMask.data[i + 3] = 255;
+  }
+  binaryCtx.putImageData(binaryMask, 0, 0);
+
+  const featherCanvas = document.createElement("canvas");
+  featherCanvas.width = sw;
+  featherCanvas.height = sh;
+  const featherCtx = featherCanvas.getContext("2d");
+  if (!featherCtx) throw new Error("临时画布失败");
+  featherCtx.filter = "blur(8px)";
+  featherCtx.drawImage(binaryMaskCanvas, 0, 0);
+  featherCtx.filter = "none";
+
+  const cv = await loadOpenCv();
+  let srcMat: any;
+  let maskMat: any;
+  let grayMask: any;
+  let kernel: any;
+  let inpainted: any;
+
+  try {
+    srcMat = cv.imread(srcCanvas);
+    maskMat = cv.imread(binaryMaskCanvas);
+    grayMask = new cv.Mat();
+    cv.cvtColor(maskMat, grayMask, cv.COLOR_RGBA2GRAY, 0);
+    cv.threshold(grayMask, grayMask, 10, 255, cv.THRESH_BINARY);
+    kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+    cv.dilate(grayMask, grayMask, kernel, new cv.Point(-1, -1), 1);
+    inpainted = new cv.Mat();
+    cv.inpaint(srcMat, grayMask, inpainted, 5, cv.INPAINT_TELEA);
+
+    const outputRegionCanvas = document.createElement("canvas");
+    outputRegionCanvas.width = sw;
+    outputRegionCanvas.height = sh;
+    cv.imshow(outputRegionCanvas, inpainted);
+
+    const blendedCanvas = document.createElement("canvas");
+    blendedCanvas.width = sw;
+    blendedCanvas.height = sh;
+    const blendedCtx = blendedCanvas.getContext("2d");
+    if (!blendedCtx) throw new Error("结果合成失败");
+
+    const originalData = srcCtx.getImageData(0, 0, sw, sh);
+    const inpaintData = outputRegionCanvas.getContext("2d")?.getImageData(0, 0, sw, sh);
+    const featherData = featherCtx.getImageData(0, 0, sw, sh);
+    if (!inpaintData) throw new Error("结果读取失败");
+
+    const finalData = blendedCtx.createImageData(sw, sh);
+    for (let i = 0; i < finalData.data.length; i += 4) {
+      const alpha = featherData.data[i] / 255;
+      finalData.data[i] = Math.round(originalData.data[i] * (1 - alpha) + inpaintData.data[i] * alpha);
+      finalData.data[i + 1] = Math.round(originalData.data[i + 1] * (1 - alpha) + inpaintData.data[i + 1] * alpha);
+      finalData.data[i + 2] = Math.round(originalData.data[i + 2] * (1 - alpha) + inpaintData.data[i + 2] * alpha);
+      finalData.data[i + 3] = 255;
+    }
+    blendedCtx.putImageData(finalData, 0, 0);
+
+    const finalCanvas = document.createElement("canvas");
+    finalCanvas.width = baseCanvas.width;
+    finalCanvas.height = baseCanvas.height;
+    const finalCtx = finalCanvas.getContext("2d");
+    if (!finalCtx) throw new Error("结果合成失败");
+    finalCtx.drawImage(baseCanvas, 0, 0);
+    finalCtx.drawImage(blendedCanvas, 0, 0, sw, sh, x, y, w, h);
+
+    return await new Promise<Blob>((resolve, reject) => {
+      finalCanvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("输出失败"))), "image/png");
+    });
+  } finally {
+    srcMat?.delete?.();
+    maskMat?.delete?.();
+    grayMask?.delete?.();
+    kernel?.delete?.();
+    inpainted?.delete?.();
+  }
 }
 
 export default function Home() {
@@ -402,25 +502,16 @@ export default function Home() {
         <header className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl shadow-sky-950/25 backdrop-blur md:p-10">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="max-w-3xl">
-              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-sky-300">AI Photo Studio</p>
-              <h1 className="mt-4 text-3xl font-bold tracking-tight md:text-5xl">
-                更快更顺手的图片处理：抠图、证件照、智能消除
-              </h1>
-              <p className="mt-4 text-sm leading-7 text-slate-200/90 md:text-base">
-                不讲技术栈，不解释大段原理。选图 → 处理 → 下载。
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge tone="sky">批量抠图</Badge>
-              <Badge tone="violet">证件照</Badge>
-              <Badge tone="emerald">智能消除</Badge>
+              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-sky-300">image-process-online.xyz</p>
+              <h1 className="mt-4 text-3xl font-bold tracking-tight md:text-5xl">图片处理</h1>
+              <p className="mt-4 text-sm leading-7 text-slate-200/90 md:text-base">背景消除 · 证件照 · 消除</p>
             </div>
           </div>
 
           <div className="mt-7 grid gap-3 sm:grid-cols-3">
-            <TabCard active={tab === "bg"} tone="sky" title="背景消除（批量）" subtitle="多张追加上传，一次处理" onClick={() => setTab("bg")} />
-            <TabCard active={tab === "id"} tone="violet" title="证件照制作" subtitle="自动抠图 + 自动贴合" onClick={() => setTab("id")} />
-            <TabCard active={tab === "erase"} tone="emerald" title="AI 消除" subtitle="手机也能连续涂抹" onClick={() => setTab("erase")} />
+            <TabCard active={tab === "bg"} tone="sky" title="背景消除" subtitle="支持批量" onClick={() => setTab("bg")} />
+            <TabCard active={tab === "id"} tone="violet" title="证件照" subtitle="一键生成" onClick={() => setTab("id")} />
+            <TabCard active={tab === "erase"} tone="emerald" title="AI 消除" subtitle="局部处理" onClick={() => setTab("erase")} />
           </div>
         </header>
 
@@ -430,9 +521,7 @@ export default function Home() {
           {tab === "erase" && <AiEraser />}
         </div>
 
-        <footer className="mt-10 text-center text-xs text-slate-400">
-          提示：图片不会被持久化存储。处理完成后记得下载结果。
-        </footer>
+        <footer className="mt-10 text-center text-xs text-slate-400">处理完成后可直接下载</footer>
       </section>
     </main>
   );
@@ -1103,82 +1192,14 @@ function AiEraser() {
     setError("");
 
     try {
-      const bctx = base.getContext("2d");
-      const mctx = mask.getContext("2d");
-      if (!bctx || !mctx) throw new Error("画布初始化失败");
-
-      const sourceData = bctx.getImageData(0, 0, base.width, base.height);
-      const maskData = mctx.getImageData(0, 0, mask.width, mask.height);
-
-      const bbox = findMaskBBox(maskData.data, base.width, base.height);
-      if (!bbox) throw new Error("请先涂抹要消除的区域");
-
-      const pad = 36;
-      const x0 = Math.max(0, bbox.minX - pad);
-      const y0 = Math.max(0, bbox.minY - pad);
-      const x1 = Math.min(base.width - 1, bbox.maxX + pad);
-      const y1 = Math.min(base.height - 1, bbox.maxY + pad);
-      const w = x1 - x0 + 1;
-      const h = y1 - y0 + 1;
-
-      // downscale large region for speed
-      const maxSide = 520;
-      const scale = Math.min(1, maxSide / Math.max(w, h));
-      const sw = Math.max(1, Math.round(w * scale));
-      const sh = Math.max(1, Math.round(h * scale));
-
-      const tempSrc = document.createElement("canvas");
-      tempSrc.width = sw;
-      tempSrc.height = sh;
-      const ts = tempSrc.getContext("2d");
-      if (!ts) throw new Error("临时画布失败");
-
-      const tempMask = document.createElement("canvas");
-      tempMask.width = sw;
-      tempMask.height = sh;
-      const tm = tempMask.getContext("2d");
-      if (!tm) throw new Error("临时画布失败");
-
-      // draw cropped source/mask to temp (scaled)
-      ts.drawImage(base, x0, y0, w, h, 0, 0, sw, sh);
-      tm.drawImage(mask, x0, y0, w, h, 0, 0, sw, sh);
-
-      const srcCrop = ts.getImageData(0, 0, sw, sh);
-      const maskCrop = tm.getImageData(0, 0, sw, sh);
-
-      const filled = fillMaskedRegion(srcCrop.data, maskCrop.data, sw, sh);
-      const outCrop = new ImageData(filled, sw, sh);
-
-      const outCanvas = document.createElement("canvas");
-      outCanvas.width = base.width;
-      outCanvas.height = base.height;
-      const outCtx = outCanvas.getContext("2d");
-      if (!outCtx) throw new Error("输出画布失败");
-
-      // start from original
-      outCtx.putImageData(sourceData, 0, 0);
-
-      // paint cropped filled region back
-      const filledCanvas = document.createElement("canvas");
-      filledCanvas.width = sw;
-      filledCanvas.height = sh;
-      const fc = filledCanvas.getContext("2d");
-      if (!fc) throw new Error("输出画布失败");
-      fc.putImageData(outCrop, 0, 0);
-
-      outCtx.drawImage(filledCanvas, 0, 0, sw, sh, x0, y0, w, h);
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        outCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error("输出失败"))), "image/png");
-      });
-
+      const blob = await localInpaint(base, mask);
       revokeUrl(resultUrl);
       setResultBlob(blob);
       setResultUrl(URL.createObjectURL(blob));
       setStatus("success");
     } catch (err) {
       setStatus("error");
-      setError(err instanceof Error ? err.message : "消除失败");
+      setError(err instanceof Error ? err.message : "AI 修复失败");
     }
   }
 
@@ -1188,7 +1209,7 @@ function AiEraser() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold">AI 消除</h2>
-            <p className="mt-1 text-sm text-slate-300">手机支持连续涂抹（Pointer Events），处理时只算涂抹区域，速度更快。</p>
+            <p className="mt-1 text-sm text-slate-300">涂抹后开始处理</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -1209,6 +1230,7 @@ function AiEraser() {
         </div>
 
         <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-slate-950/60 p-5">
+          <div className="mb-3 text-xs text-slate-400">本地增强修复（已保留云端备用方案）</div>
           <div className="flex flex-wrap items-center gap-4">
             <label className="text-sm text-slate-300">
               画笔：<span className="ml-2 font-semibold text-white">{brushSize}px</span>

@@ -1,2 +1,3 @@
 NEXTJS_ENV=development
 REMOVE_BG_API_KEY=your_remove_bg_api_key_here
+CLIPDROP_API_KEY=your_clipdrop_api_key_here
