@@ -323,43 +323,19 @@ async function createMaskBlob(maskCanvas: HTMLCanvasElement) {
 let openCvPromise: Promise<any> | null = null;
 
 async function loadOpenCv() {
-  if (typeof window === "undefined") throw new Error("浏览器环境不可用");
-  const existing = (window as any).cv;
-  if (existing?.inpaint) return existing;
-
   if (!openCvPromise) {
-    openCvPromise = new Promise((resolve, reject) => {
-      const w = window as any;
-
-      const finish = () => {
-        const cv = w.cv;
-        if (cv?.inpaint) {
-          resolve(cv);
-          return;
-        }
-        if (cv) {
-          cv.onRuntimeInitialized = () => resolve(cv);
-          return;
-        }
-        reject(new Error("OpenCV 初始化失败"));
-      };
-
-      const existingScript = document.querySelector('script[data-opencv="true"]') as HTMLScriptElement | null;
-      if (existingScript) {
-        existingScript.addEventListener("load", finish, { once: true });
-        existingScript.addEventListener("error", () => reject(new Error("OpenCV 加载失败")), { once: true });
-        return;
+    openCvPromise = (async () => {
+      const cvModule = await import("@techstark/opencv-js");
+      const cv = (cvModule as any).default ?? cvModule;
+      if (cv instanceof Promise) {
+        return await cv;
       }
-
-      const script = document.createElement("script");
-      script.src = "https://docs.opencv.org/4.x/opencv.js";
-      script.async = true;
-      script.defer = true;
-      script.dataset.opencv = "true";
-      script.onload = finish;
-      script.onerror = () => reject(new Error("OpenCV 加载失败"));
-      document.body.appendChild(script);
-    });
+      if (cv?.inpaint) return cv;
+      await new Promise<void>((resolve) => {
+        cv.onRuntimeInitialized = () => resolve();
+      });
+      return cv;
+    })();
   }
 
   return await openCvPromise;

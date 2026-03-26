@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "edge";
-
 const CLIPDROP_ENDPOINT = "https://clipdrop-api.co/cleanup/v1";
 
 export async function POST(req: Request) {
