@@ -328,29 +328,43 @@ async function loadOpenCv() {
   const w = window as any;
   if (w.cv?.inpaint) return w.cv;
 
-  if (!openCvPromise) {
-    openCvPromise = new Promise((resolve, reject) => {
-      const finish = () => {
+  const waitUntilReady = () =>
+    new Promise<any>((resolve, reject) => {
+      const start = Date.now();
+      const timeoutMs = 45000;
+
+      const tick = () => {
         const cv = w.cv;
-        if (!cv) {
-          reject(new Error("OpenCV 初始化失败"));
-          return;
-        }
-        if (cv.inpaint) {
+        if (cv?.inpaint) {
           resolve(cv);
           return;
         }
-        cv.onRuntimeInitialized = () => resolve(cv);
+        if (Date.now() - start > timeoutMs) {
+          reject(new Error("OpenCV 加载超时，请刷新页面重试"));
+          return;
+        }
+        setTimeout(tick, 120);
       };
 
+      tick();
+    });
+
+  if (!openCvPromise) {
+    openCvPromise = new Promise((resolve, reject) => {
       const existing = document.querySelector('script[data-opencv="true"]') as HTMLScriptElement | null;
-      if (existing) {
-        // script 已插入，等它完成即可
-        if (w.cv) finish();
-        else {
-          existing.addEventListener("load", finish, { once: true });
-          existing.addEventListener("error", () => reject(new Error("OpenCV 加载失败")), { once: true });
+
+      const afterScript = async () => {
+        try {
+          const cv = await waitUntilReady();
+          resolve(cv);
+        } catch (e) {
+          reject(e);
         }
+      };
+
+      if (existing) {
+        // script 已插入
+        afterScript();
         return;
       }
 
@@ -359,7 +373,7 @@ async function loadOpenCv() {
       script.async = true;
       script.defer = true;
       script.dataset.opencv = "true";
-      script.onload = finish;
+      script.onload = () => void afterScript();
       script.onerror = () => reject(new Error("OpenCV 加载失败"));
       document.body.appendChild(script);
     });
@@ -382,7 +396,7 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   const w = Math.min(baseCanvas.width - x, bbox.maxX - bbox.minX + 1 + pad * 2);
   const h = Math.min(baseCanvas.height - y, bbox.maxY - bbox.minY + 1 + pad * 2);
 
-  const maxSide = 960;
+  const maxSide = 640;
   const scale = Math.min(1, maxSide / Math.max(w, h));
   const sw = Math.max(1, Math.round(w * scale));
   const sh = Math.max(1, Math.round(h * scale));
@@ -1131,6 +1145,7 @@ function AiEraser() {
     setError("");
     setStatus("idle");
     await drawBase(url);
+    void loadOpenCv().catch(() => {});
 
     e.target.value = "";
   }
@@ -1195,7 +1210,12 @@ function AiEraser() {
     setError("");
 
     try {
-      const blob = await localInpaint(base, mask);
+      const blob = await Promise.race([
+        localInpaint(base, mask),
+        new Promise<Blob>((_, reject) => {
+          setTimeout(() => reject(new Error("处理超时，请缩小涂抹范围后重试")), 45000);
+        }),
+      ]);
       revokeUrl(resultUrl);
       setResultBlob(blob);
       setResultUrl(URL.createObjectURL(blob));
