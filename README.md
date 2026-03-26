@@ -1,25 +1,34 @@
-# Image Background Remover
+# AI Photo Studio
 
-A lightweight MVP for the keyword **image background remover** built with **Next.js + Tailwind CSS**.
+An online photo workflow built with Next.js for three practical jobs:
 
-## Stack
-- Next.js
-- TypeScript
-- Tailwind CSS
-- Remove.bg API
-- OpenNext for Cloudflare
-- Wrangler
+- Batch background removal
+- ID photo generation with multiple sizes, colors, and styles
+- AI-style object erasing with brush-based masking and smart fill
 
-## Features in this MVP
-- Single image upload (JPG / PNG / WEBP)
-- File size validation (10MB max)
-- Drag-and-drop upload flow
-- Clear loading, success, empty, and error states
-- Remove.bg API integration through a server route
-- Before / After preview
-- Transparent PNG download
-- SEO-oriented landing page sections and FAQ
-- `docs/mvp.md` included in the repository
+## What changed in this version
+
+### 1. Background removal
+- Supports selecting multiple images at once
+- Selected images appear directly in the upload area
+- The upload button changes to **重新选择图片** after files are selected
+- Batch processing and per-image downloads are supported
+- Technical stack / MVP marketing sections were removed from the page
+
+### 2. ID photo maker
+- Upload one portrait photo
+- Remove background first
+- Generate ID photos with:
+  - multiple size presets
+  - multiple background colors
+  - multiple portrait styles
+- Export result as PNG
+
+### 3. AI eraser
+- Upload an image
+- Brush over the object / passerby / unwanted area
+- Use OpenCV inpainting in the browser for intelligent fill-style removal
+- Export result as PNG
 
 ## Local development
 
@@ -45,44 +54,25 @@ REMOVE_BG_API_KEY=your_remove_bg_api_key_here
 ```
 
 ## Cloudflare deployment
-This repository is now prepared for a Cloudflare deployment path using **OpenNext for Cloudflare**.
-
-### Installed tooling
-- `@opennextjs/cloudflare`
-- `wrangler`
-
-### Added files
-- `wrangler.jsonc`
-- `open-next.config.ts`
-- `.dev.vars.example`
 
 ### Available scripts
 ```bash
+npm run build
 npm run cf:build
-npm run cf:preview
 npm run cf:deploy
 ```
 
-### Before first deploy
-1. Log in to Cloudflare:
-   ```bash
-   npx wrangler auth login
-   ```
-2. Set your production env var in Cloudflare for the worker:
-   - `REMOVE_BG_API_KEY`
-3. (Optional) Create a local `.dev.vars` from `.dev.vars.example` for Wrangler local preview.
+### Production note
+Do not deploy directly after code changes if a manual review is required.
+Recommended flow for this repo:
 
-### Local Cloudflare preview
-```bash
-npm run cf:preview
-```
-
-### Deploy
-```bash
-npm run cf:deploy
-```
+1. Change local code
+2. Validate locally
+3. Push to GitHub for review
+4. Deploy to Cloudflare only after approval
 
 ## Notes
-- The current MVP does not persist uploaded images.
-- Images are processed per request.
-- `.env.local` is local-only and should never be committed.
+- Uploaded images are not stored persistently
+- Background removal uses the server-side Remove.bg integration
+- ID photo generation is composited client-side after cutout generation
+- AI eraser currently uses in-browser OpenCV inpainting

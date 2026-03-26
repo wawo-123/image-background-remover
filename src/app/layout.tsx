@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,15 +14,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Image Background Remover – Remove Background from Images Online",
+  title: "AI Photo Studio – Background Remover, ID Photo Maker & AI Eraser",
   description:
-    "Remove background from images online in seconds. Fast AI image background remover for transparent PNG downloads.",
+    "Batch remove backgrounds, create ID photos with multiple sizes and colors, and erase unwanted objects with intelligent fill.",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode;
+  children: ReactNode;
 }>) {
   return (
     <html
