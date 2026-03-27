@@ -402,13 +402,13 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   const bbox = findMaskBBox(maskImage.data, maskCanvas.width, maskCanvas.height);
   if (!bbox) throw new Error("请先涂抹要消除的区域");
 
-  const pad = 48;
+  const pad = 24;
   const x = Math.max(0, bbox.minX - pad);
   const y = Math.max(0, bbox.minY - pad);
   const w = Math.min(baseCanvas.width - x, bbox.maxX - bbox.minX + 1 + pad * 2);
   const h = Math.min(baseCanvas.height - y, bbox.maxY - bbox.minY + 1 + pad * 2);
 
-  const maxSide = 480;
+  const maxSide = 320;
   const scale = Math.min(1, maxSide / Math.max(w, h));
   const sw = Math.max(1, Math.round(w * scale));
   const sh = Math.max(1, Math.round(h * scale));
@@ -465,7 +465,7 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
     const timeout = setTimeout(() => {
       worker.terminate();
       reject(new Error("处理超时，请缩小涂抹范围后重试"));
-    }, 30000);
+    }, 15000);
 
     worker.onmessage = (evt) => {
       const msg = evt.data || {};
@@ -489,7 +489,7 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
         height: sh,
         srcBuffer: originalData.data.buffer,
         maskBuffer: maskGray.buffer,
-        radius: 3,
+        radius: 2,
       },
       [originalData.data.buffer, maskGray.buffer]
     );
