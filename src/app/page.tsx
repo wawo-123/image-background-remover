@@ -335,6 +335,7 @@ async function createMaskBlob(maskCanvas: HTMLCanvasElement) {
 let openCvPromise: Promise<any> | null = null;
 let inpaintWorker: Worker | null = null;
 let inpaintWorkerWarmup: Promise<void> | null = null;
+let inpaintWorkerReady = false;
 
 function getInpaintWorker() {
   if (typeof window === "undefined") throw new Error("浏览器环境不可用");
@@ -346,31 +347,33 @@ function getInpaintWorker() {
 
 function warmupInpaintWorker() {
   if (typeof window === "undefined") return Promise.resolve();
+  if (inpaintWorkerReady) return Promise.resolve();
   if (inpaintWorkerWarmup) return inpaintWorkerWarmup;
 
   const worker = getInpaintWorker();
   const jobId = `warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  inpaintWorkerWarmup = new Promise<void>((resolve, reject) => {
+  inpaintWorkerWarmup = new Promise<void>((resolve) => {
     const timeout = setTimeout(() => {
+      cleanup();
       inpaintWorkerWarmup = null;
-      reject(new Error("AI 修复引擎预热超时"));
-    }, 12000);
+      resolve();
+    }, 45000);
 
     const onMessage = (evt: MessageEvent) => {
       const msg = evt.data || {};
       if (msg.id !== jobId) return;
       cleanup();
-      if (msg.ok) resolve();
-      else {
-        inpaintWorkerWarmup = null;
-        reject(new Error(msg.error || "AI 修复引擎预热失败"));
+      if (msg.ok) {
+        inpaintWorkerReady = true;
       }
+      inpaintWorkerWarmup = null;
+      resolve();
     };
 
     const onError = () => {
       cleanup();
       inpaintWorkerWarmup = null;
-      reject(new Error("AI 修复引擎预热失败"));
+      resolve();
     };
 
     const cleanup = () => {
@@ -517,10 +520,11 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   const outBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const timeoutMs = inpaintWorkerReady ? 15000 : 60000;
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("处理超时，请缩小涂抹范围后重试"));
-    }, 12000);
+    }, timeoutMs);
 
     const onMessage = (evt: MessageEvent) => {
       const msg = evt.data || {};
