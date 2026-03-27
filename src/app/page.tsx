@@ -5,6 +5,7 @@ import {
   DragEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -1080,6 +1081,7 @@ function AiEraser() {
 
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [pendingDrawUrl, setPendingDrawUrl] = useState("");
   const [resultUrl, setResultUrl] = useState("");
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [error, setError] = useState("");
@@ -1090,7 +1092,7 @@ function AiEraser() {
   async function drawBase(url: string) {
     const base = imageCanvasRef.current;
     const mask = maskCanvasRef.current;
-    if (!base || !mask) return;
+    if (!base || !mask) return false;
 
     const img = await loadImage(url);
     const maxW = 720;
@@ -1104,7 +1106,7 @@ function AiEraser() {
 
     const bctx = base.getContext("2d");
     const mctx = mask.getContext("2d");
-    if (!bctx || !mctx) return;
+    if (!bctx || !mctx) return false;
 
     bctx.clearRect(0, 0, w, h);
     bctx.drawImage(img, 0, 0, w, h);
@@ -1115,7 +1117,26 @@ function AiEraser() {
     mctx.strokeStyle = "rgba(34, 197, 94, 0.92)";
     mctx.fillStyle = "rgba(34, 197, 94, 0.92)";
     mctx.lineWidth = brushSize;
+    return true;
   }
+
+  useEffect(() => {
+    if (!pendingDrawUrl) return;
+    let cancelled = false;
+
+    const run = async () => {
+      const ok = await drawBase(pendingDrawUrl);
+      if (!cancelled && ok) {
+        setPendingDrawUrl("");
+        void loadOpenCv().catch(() => {});
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingDrawUrl, brushSize]);
 
   function resetMask() {
     const mask = maskCanvasRef.current;
@@ -1140,12 +1161,11 @@ function AiEraser() {
     const url = URL.createObjectURL(next);
     setSourceFile(next);
     setSourceUrl(url);
+    setPendingDrawUrl(url);
     setResultUrl("");
     setResultBlob(null);
     setError("");
     setStatus("idle");
-    await drawBase(url);
-    void loadOpenCv().catch(() => {});
 
     e.target.value = "";
   }
