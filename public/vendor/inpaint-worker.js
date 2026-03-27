@@ -33,6 +33,11 @@ self.onmessage = async (evt) => {
   try {
     const cv = await getCv();
 
+    if (msg.type === 'warmup') {
+      self.postMessage({ id, ok: true, warmed: true });
+      return;
+    }
+
     const src = new Uint8ClampedArray(srcBuffer);
     const maskGray = new Uint8ClampedArray(maskBuffer);
 

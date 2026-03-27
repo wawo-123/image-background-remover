@@ -333,6 +333,59 @@ async function createMaskBlob(maskCanvas: HTMLCanvasElement) {
 }
 
 let openCvPromise: Promise<any> | null = null;
+let inpaintWorker: Worker | null = null;
+let inpaintWorkerWarmup: Promise<void> | null = null;
+
+function getInpaintWorker() {
+  if (typeof window === "undefined") throw new Error("浏览器环境不可用");
+  if (!inpaintWorker) {
+    inpaintWorker = new Worker("/vendor/inpaint-worker.js");
+  }
+  return inpaintWorker;
+}
+
+function warmupInpaintWorker() {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (inpaintWorkerWarmup) return inpaintWorkerWarmup;
+
+  const worker = getInpaintWorker();
+  const jobId = `warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  inpaintWorkerWarmup = new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      inpaintWorkerWarmup = null;
+      reject(new Error("AI 修复引擎预热超时"));
+    }, 12000);
+
+    const onMessage = (evt: MessageEvent) => {
+      const msg = evt.data || {};
+      if (msg.id !== jobId) return;
+      cleanup();
+      if (msg.ok) resolve();
+      else {
+        inpaintWorkerWarmup = null;
+        reject(new Error(msg.error || "AI 修复引擎预热失败"));
+      }
+    };
+
+    const onError = () => {
+      cleanup();
+      inpaintWorkerWarmup = null;
+      reject(new Error("AI 修复引擎预热失败"));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    worker.postMessage({ type: "warmup", id: jobId });
+  });
+
+  return inpaintWorkerWarmup;
+}
 
 async function loadOpenCv() {
   if (typeof window === "undefined") throw new Error("浏览器环境不可用");
@@ -395,6 +448,8 @@ async function loadOpenCv() {
 }
 
 async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanvasElement) {
+  await warmupInpaintWorker();
+
   const maskCtx = maskCanvas.getContext("2d");
   if (!maskCtx) throw new Error("画布初始化失败");
 
@@ -458,30 +513,37 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   featherCtx.filter = "none";
   const featherData = featherCtx.getImageData(0, 0, sw, sh);
 
-  const worker = new Worker("/vendor/inpaint-worker.js");
+  const worker = getInpaintWorker();
   const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   const outBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      worker.terminate();
+      cleanup();
       reject(new Error("处理超时，请缩小涂抹范围后重试"));
-    }, 15000);
+    }, 12000);
 
-    worker.onmessage = (evt) => {
+    const onMessage = (evt: MessageEvent) => {
       const msg = evt.data || {};
       if (msg.id !== jobId) return;
-      clearTimeout(timeout);
-      worker.terminate();
+      cleanup();
       if (msg.ok) resolve(msg.outBuffer);
       else reject(new Error(msg.error || "AI 修复失败"));
     };
 
-    worker.onerror = () => {
-      clearTimeout(timeout);
-      worker.terminate();
+    const onError = () => {
+      cleanup();
+      inpaintWorkerWarmup = null;
       reject(new Error("AI 修复进程启动失败"));
     };
 
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
     worker.postMessage(
       {
         id: jobId,
@@ -1184,6 +1246,11 @@ function AiEraser() {
     setError("");
     setStatus("idle");
 
+    // Prewarm AI erase engine in background to avoid cold-start timeout.
+    void warmupInpaintWorker().catch(() => {
+      // ignore; actual run will surface error if it still fails
+    });
+
     e.target.value = "";
   }
 
@@ -1247,12 +1314,7 @@ function AiEraser() {
     setError("");
 
     try {
-      const blob = await Promise.race([
-        localInpaint(base, mask),
-        new Promise<Blob>((_, reject) => {
-          setTimeout(() => reject(new Error("处理超时，请缩小涂抹范围后重试")), 45000);
-        }),
-      ]);
+      const blob = await localInpaint(base, mask);
       revokeUrl(resultUrl);
       setResultBlob(blob);
       setResultUrl(URL.createObjectURL(blob));
