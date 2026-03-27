@@ -1128,7 +1128,6 @@ function AiEraser() {
       const ok = await drawBase(pendingDrawUrl);
       if (!cancelled && ok) {
         setPendingDrawUrl("");
-        void loadOpenCv().catch(() => {});
       }
     };
 
