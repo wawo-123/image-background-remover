@@ -408,7 +408,7 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   const w = Math.min(baseCanvas.width - x, bbox.maxX - bbox.minX + 1 + pad * 2);
   const h = Math.min(baseCanvas.height - y, bbox.maxY - bbox.minY + 1 + pad * 2);
 
-  const maxSide = 640;
+  const maxSide = 480;
   const scale = Math.min(1, maxSide / Math.max(w, h));
   const sw = Math.max(1, Math.round(w * scale));
   const sh = Math.max(1, Math.round(h * scale));
@@ -419,6 +419,7 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   const srcCtx = srcCanvas.getContext("2d");
   if (!srcCtx) throw new Error("临时画布失败");
   srcCtx.drawImage(baseCanvas, x, y, w, h, 0, 0, sw, sh);
+  const originalData = srcCtx.getImageData(0, 0, sw, sh);
 
   const regionMaskCanvas = document.createElement("canvas");
   regionMaskCanvas.width = sw;
@@ -427,94 +428,100 @@ async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanva
   if (!regionMaskCtx) throw new Error("临时画布失败");
   regionMaskCtx.drawImage(maskCanvas, x, y, w, h, 0, 0, sw, sh);
 
-  const binaryMaskCanvas = document.createElement("canvas");
-  binaryMaskCanvas.width = sw;
-  binaryMaskCanvas.height = sh;
-  const binaryCtx = binaryMaskCanvas.getContext("2d");
-  if (!binaryCtx) throw new Error("临时画布失败");
   const rawMask = regionMaskCtx.getImageData(0, 0, sw, sh);
-  const binaryMask = binaryCtx.createImageData(sw, sh);
-  for (let i = 0; i < rawMask.data.length; i += 4) {
-    const active = rawMask.data[i + 3] > 10 || rawMask.data[i + 1] > 10;
-    const v = active ? 255 : 0;
-    binaryMask.data[i] = v;
-    binaryMask.data[i + 1] = v;
-    binaryMask.data[i + 2] = v;
-    binaryMask.data[i + 3] = 255;
+  const maskGray = new Uint8ClampedArray(sw * sh);
+  for (let i = 0, p = 0; i < rawMask.data.length; i += 4, p += 1) {
+    maskGray[p] = rawMask.data[i + 3] > 10 || rawMask.data[i + 1] > 10 ? 255 : 0;
   }
-  binaryCtx.putImageData(binaryMask, 0, 0);
 
   const featherCanvas = document.createElement("canvas");
   featherCanvas.width = sw;
   featherCanvas.height = sh;
   const featherCtx = featherCanvas.getContext("2d");
   if (!featherCtx) throw new Error("临时画布失败");
-  featherCtx.filter = "blur(8px)";
-  featherCtx.drawImage(binaryMaskCanvas, 0, 0);
-  featherCtx.filter = "none";
-
-  const cv = await loadOpenCv();
-  let srcMat: any;
-  let maskMat: any;
-  let grayMask: any;
-  let kernel: any;
-  let inpainted: any;
-
-  try {
-    srcMat = cv.imread(srcCanvas);
-    maskMat = cv.imread(binaryMaskCanvas);
-    grayMask = new cv.Mat();
-    cv.cvtColor(maskMat, grayMask, cv.COLOR_RGBA2GRAY, 0);
-    cv.threshold(grayMask, grayMask, 10, 255, cv.THRESH_BINARY);
-    kernel = cv.Mat.ones(5, 5, cv.CV_8U);
-    cv.dilate(grayMask, grayMask, kernel, new cv.Point(-1, -1), 1);
-    inpainted = new cv.Mat();
-    cv.inpaint(srcMat, grayMask, inpainted, 5, cv.INPAINT_TELEA);
-
-    const outputRegionCanvas = document.createElement("canvas");
-    outputRegionCanvas.width = sw;
-    outputRegionCanvas.height = sh;
-    cv.imshow(outputRegionCanvas, inpainted);
-
-    const blendedCanvas = document.createElement("canvas");
-    blendedCanvas.width = sw;
-    blendedCanvas.height = sh;
-    const blendedCtx = blendedCanvas.getContext("2d");
-    if (!blendedCtx) throw new Error("结果合成失败");
-
-    const originalData = srcCtx.getImageData(0, 0, sw, sh);
-    const inpaintData = outputRegionCanvas.getContext("2d")?.getImageData(0, 0, sw, sh);
-    const featherData = featherCtx.getImageData(0, 0, sw, sh);
-    if (!inpaintData) throw new Error("结果读取失败");
-
-    const finalData = blendedCtx.createImageData(sw, sh);
-    for (let i = 0; i < finalData.data.length; i += 4) {
-      const alpha = featherData.data[i] / 255;
-      finalData.data[i] = Math.round(originalData.data[i] * (1 - alpha) + inpaintData.data[i] * alpha);
-      finalData.data[i + 1] = Math.round(originalData.data[i + 1] * (1 - alpha) + inpaintData.data[i + 1] * alpha);
-      finalData.data[i + 2] = Math.round(originalData.data[i + 2] * (1 - alpha) + inpaintData.data[i + 2] * alpha);
-      finalData.data[i + 3] = 255;
-    }
-    blendedCtx.putImageData(finalData, 0, 0);
-
-    const finalCanvas = document.createElement("canvas");
-    finalCanvas.width = baseCanvas.width;
-    finalCanvas.height = baseCanvas.height;
-    const finalCtx = finalCanvas.getContext("2d");
-    if (!finalCtx) throw new Error("结果合成失败");
-    finalCtx.drawImage(baseCanvas, 0, 0);
-    finalCtx.drawImage(blendedCanvas, 0, 0, sw, sh, x, y, w, h);
-
-    return await new Promise<Blob>((resolve, reject) => {
-      finalCanvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("输出失败"))), "image/png");
-    });
-  } finally {
-    srcMat?.delete?.();
-    maskMat?.delete?.();
-    grayMask?.delete?.();
-    kernel?.delete?.();
-    inpainted?.delete?.();
+  const maskCanvas2 = document.createElement("canvas");
+  maskCanvas2.width = sw;
+  maskCanvas2.height = sh;
+  const maskCanvas2Ctx = maskCanvas2.getContext("2d");
+  if (!maskCanvas2Ctx) throw new Error("临时画布失败");
+  const maskImageData = maskCanvas2Ctx.createImageData(sw, sh);
+  for (let i = 0, p = 0; i < maskImageData.data.length; i += 4, p += 1) {
+    const v = maskGray[p];
+    maskImageData.data[i] = v;
+    maskImageData.data[i + 1] = v;
+    maskImageData.data[i + 2] = v;
+    maskImageData.data[i + 3] = 255;
   }
+  maskCanvas2Ctx.putImageData(maskImageData, 0, 0);
+  featherCtx.filter = "blur(8px)";
+  featherCtx.drawImage(maskCanvas2, 0, 0);
+  featherCtx.filter = "none";
+  const featherData = featherCtx.getImageData(0, 0, sw, sh);
+
+  const worker = new Worker("/vendor/inpaint-worker.js");
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const outBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      reject(new Error("处理超时，请缩小涂抹范围后重试"));
+    }, 30000);
+
+    worker.onmessage = (evt) => {
+      const msg = evt.data || {};
+      if (msg.id !== jobId) return;
+      clearTimeout(timeout);
+      worker.terminate();
+      if (msg.ok) resolve(msg.outBuffer);
+      else reject(new Error(msg.error || "AI 修复失败"));
+    };
+
+    worker.onerror = () => {
+      clearTimeout(timeout);
+      worker.terminate();
+      reject(new Error("AI 修复进程启动失败"));
+    };
+
+    worker.postMessage(
+      {
+        id: jobId,
+        width: sw,
+        height: sh,
+        srcBuffer: originalData.data.buffer,
+        maskBuffer: maskGray.buffer,
+        radius: 3,
+      },
+      [originalData.data.buffer, maskGray.buffer]
+    );
+  });
+
+  const inpaintData = new ImageData(new Uint8ClampedArray(outBuffer), sw, sh);
+  const blendedCanvas = document.createElement("canvas");
+  blendedCanvas.width = sw;
+  blendedCanvas.height = sh;
+  const blendedCtx = blendedCanvas.getContext("2d");
+  if (!blendedCtx) throw new Error("结果合成失败");
+  const finalData = blendedCtx.createImageData(sw, sh);
+  for (let i = 0; i < finalData.data.length; i += 4) {
+    const alpha = featherData.data[i] / 255;
+    finalData.data[i] = Math.round(originalData.data[i] * (1 - alpha) + inpaintData.data[i] * alpha);
+    finalData.data[i + 1] = Math.round(originalData.data[i + 1] * (1 - alpha) + inpaintData.data[i + 1] * alpha);
+    finalData.data[i + 2] = Math.round(originalData.data[i + 2] * (1 - alpha) + inpaintData.data[i + 2] * alpha);
+    finalData.data[i + 3] = 255;
+  }
+  blendedCtx.putImageData(finalData, 0, 0);
+
+  const finalCanvas = document.createElement("canvas");
+  finalCanvas.width = baseCanvas.width;
+  finalCanvas.height = baseCanvas.height;
+  const finalCtx = finalCanvas.getContext("2d");
+  if (!finalCtx) throw new Error("结果合成失败");
+  finalCtx.drawImage(baseCanvas, 0, 0);
+  finalCtx.drawImage(blendedCanvas, 0, 0, sw, sh, x, y, w, h);
+
+  return await new Promise<Blob>((resolve, reject) => {
+    finalCanvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("输出失败"))), "image/png");
+  });
 }
 
 export default function Home() {
