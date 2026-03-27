@@ -36,6 +36,8 @@ type SizePreset = {
   bboxHeightRatio: number;
   // desired top padding ratio from canvas top to subject bbox top
   topPadRatio: number;
+  // desired bottom padding ratio from canvas bottom to subject bbox bottom
+  bottomPadRatio: number;
 };
 
 type StylePreset = {
@@ -52,10 +54,10 @@ const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const SIZE_PRESETS: SizePreset[] = [
-  { key: "one-inch", label: "一寸", width: 295, height: 413, bboxHeightRatio: 0.78, topPadRatio: 0.08 },
-  { key: "two-inch", label: "二寸", width: 413, height: 579, bboxHeightRatio: 0.8, topPadRatio: 0.08 },
-  { key: "passport", label: "护照", width: 413, height: 531, bboxHeightRatio: 0.82, topPadRatio: 0.08 },
-  { key: "square", label: "方图", width: 600, height: 600, bboxHeightRatio: 0.72, topPadRatio: 0.10 },
+  { key: "one-inch", label: "一寸", width: 295, height: 413, bboxHeightRatio: 1.0, topPadRatio: 0.0, bottomPadRatio: 0.0 },
+  { key: "two-inch", label: "二寸", width: 413, height: 579, bboxHeightRatio: 1.0, topPadRatio: 0.0, bottomPadRatio: 0.0 },
+  { key: "passport", label: "护照", width: 413, height: 531, bboxHeightRatio: 1.0, topPadRatio: 0.0, bottomPadRatio: 0.0 },
+  { key: "square", label: "方图", width: 600, height: 600, bboxHeightRatio: 0.76, topPadRatio: 0.08, bottomPadRatio: 0.035 },
 ];
 
 const BG_COLORS: Record<BgColorKey, { label: string; value: string }>= {
@@ -230,29 +232,38 @@ async function renderIdPhotoBlob(
     const bboxW = (bbox.maxX - bbox.minX + 1) / measureScale;
     const bboxH = (bbox.maxY - bbox.minY + 1) / measureScale;
 
-    const targetBBoxH = canvas.height * preset.bboxHeightRatio;
-    const scale = targetBBoxH / bboxH;
+    // Scale to fit BOTH top & bottom paddings (and avoid horizontal overflow).
+    const targetTop = canvas.height * preset.topPadRatio;
+    const targetBottom = canvas.height * (1 - preset.bottomPadRatio);
+    const availableH = Math.max(1, targetBottom - targetTop);
+    const availableW = canvas.width;
+
+    const scaleH = availableH / bboxH;
+    const scaleW = availableW / bboxW;
+    const scale = Math.min(scaleH, scaleW);
 
     const scaledImgW = cutoutImg.width * scale;
     const scaledImgH = cutoutImg.height * scale;
 
-    // bbox top in image coords
+    // bbox in scaled image coords
     const bboxTop = (bbox.minY / measureScale) * scale;
     const bboxLeft = (bbox.minX / measureScale) * scale;
+    const bboxBottom = (bbox.maxY / measureScale) * scale;
 
-    const targetTop = canvas.height * preset.topPadRatio;
-    const targetLeft = (canvas.width - (bboxW * scale)) / 2;
-
+    // Center by bbox horizontally
+    const targetLeft = (canvas.width - bboxW * scale) / 2;
     drawX = targetLeft - bboxLeft;
-    drawY = targetTop - bboxTop;
+
+    // Bottom-anchor so clothes sit at the bottom; with scale chosen above, top will also fit.
+    drawY = targetBottom - bboxBottom;
+
+    // Square avatar: still prefer top-ish framing.
+    if (presetKey === "square") {
+      drawY = targetTop - bboxTop;
+    }
+
     drawW = scaledImgW;
     drawH = scaledImgH;
-
-    // clamp a bit to avoid leaving the subject outside
-    if (presetKey === "square") {
-      // for avatar, center more
-      drawY = Math.min(drawY, canvas.height * 0.12);
-    }
   }
 
   ctx.save();
