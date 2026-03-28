@@ -450,6 +450,141 @@ async function loadOpenCv() {
   return await openCvPromise;
 }
 
+function canvasToPngBase64(canvas: HTMLCanvasElement) {
+  return canvas.toDataURL("image/png").split(",")[1] || "";
+}
+
+async function iopaintInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanvasElement) {
+  const maskCtx = maskCanvas.getContext("2d");
+  if (!maskCtx) throw new Error("画布初始化失败");
+
+  const maskImage = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const bbox = findMaskBBox(maskImage.data, maskCanvas.width, maskCanvas.height);
+  if (!bbox) throw new Error("请先涂抹要消除的区域");
+
+  const pad = 24;
+  const x = Math.max(0, bbox.minX - pad);
+  const y = Math.max(0, bbox.minY - pad);
+  const w = Math.min(baseCanvas.width - x, bbox.maxX - bbox.minX + 1 + pad * 2);
+  const h = Math.min(baseCanvas.height - y, bbox.maxY - bbox.minY + 1 + pad * 2);
+
+  // Hard cap ROI size to keep s budget.
+  const maxSide = 384;
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const sw = Math.max(1, Math.round(w * scale));
+  const sh = Math.max(1, Math.round(h * scale));
+
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = sw;
+  srcCanvas.height = sh;
+  const srcCtx = srcCanvas.getContext("2d");
+  if (!srcCtx) throw new Error("临时画布失败");
+  srcCtx.drawImage(baseCanvas, x, y, w, h, 0, 0, sw, sh);
+  const originalData = srcCtx.getImageData(0, 0, sw, sh);
+
+  const regionMaskCanvas = document.createElement("canvas");
+  regionMaskCanvas.width = sw;
+  regionMaskCanvas.height = sh;
+  const regionMaskCtx = regionMaskCanvas.getContext("2d");
+  if (!regionMaskCtx) throw new Error("临时画布失败");
+  regionMaskCtx.drawImage(maskCanvas, x, y, w, h, 0, 0, sw, sh);
+
+  const rawMask = regionMaskCtx.getImageData(0, 0, sw, sh);
+  const maskGray = new Uint8ClampedArray(sw * sh);
+  for (let i = 0, p = 0; i < rawMask.data.length; i += 4, p += 1) {
+    maskGray[p] = rawMask.data[i + 3] > 10 || rawMask.data[i + 1] > 10 ? 255 : 0;
+  }
+
+  // Binary mask for IOPaint (0/255), plus feather for blending.
+  const maskCanvas2 = document.createElement("canvas");
+  maskCanvas2.width = sw;
+  maskCanvas2.height = sh;
+  const maskCanvas2Ctx = maskCanvas2.getContext("2d");
+  if (!maskCanvas2Ctx) throw new Error("临时画布失败");
+  const maskImageData = maskCanvas2Ctx.createImageData(sw, sh);
+  for (let i = 0, p = 0; i < maskImageData.data.length; i += 4, p += 1) {
+    const v = maskGray[p];
+    maskImageData.data[i] = v;
+    maskImageData.data[i + 1] = v;
+    maskImageData.data[i + 2] = v;
+    maskImageData.data[i + 3] = 255;
+  }
+  maskCanvas2Ctx.putImageData(maskImageData, 0, 0);
+
+  const featherCanvas = document.createElement("canvas");
+  featherCanvas.width = sw;
+  featherCanvas.height = sh;
+  const featherCtx = featherCanvas.getContext("2d");
+  if (!featherCtx) throw new Error("临时画布失败");
+  featherCtx.filter = "blur(8px)";
+  featherCtx.drawImage(maskCanvas2, 0, 0);
+  featherCtx.filter = "none";
+  const featherData = featherCtx.getImageData(0, 0, sw, sh);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 9500);
+
+  try {
+    const payload = {
+      image: canvasToPngBase64(srcCanvas),
+      mask: canvasToPngBase64(maskCanvas2),
+      hd_strategy: "Original",
+    };
+
+    const resp = await fetch("http://127.0.0.1:8080/api/v1/inpaint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) throw new Error("本机 AI 引擎不可用");
+
+    const inpaintBlob = await resp.blob();
+    const inpaintImg = await loadImage(URL.createObjectURL(inpaintBlob));
+
+    const inpaintCanvas = document.createElement("canvas");
+    inpaintCanvas.width = sw;
+    inpaintCanvas.height = sh;
+    const inpaintCtx = inpaintCanvas.getContext("2d");
+    if (!inpaintCtx) throw new Error("结果读取失败");
+    inpaintCtx.drawImage(inpaintImg, 0, 0, sw, sh);
+    const inpaintData = inpaintCtx.getImageData(0, 0, sw, sh);
+
+    const blendedCanvas = document.createElement("canvas");
+    blendedCanvas.width = sw;
+    blendedCanvas.height = sh;
+    const blendedCtx = blendedCanvas.getContext("2d");
+    if (!blendedCtx) throw new Error("结果合成失败");
+    const finalData = blendedCtx.createImageData(sw, sh);
+    for (let i = 0; i < finalData.data.length; i += 4) {
+      const alpha = featherData.data[i] / 255;
+      finalData.data[i] = Math.round(originalData.data[i] * (1 - alpha) + inpaintData.data[i] * alpha);
+      finalData.data[i + 1] = Math.round(originalData.data[i + 1] * (1 - alpha) + inpaintData.data[i + 1] * alpha);
+      finalData.data[i + 2] = Math.round(originalData.data[i + 2] * (1 - alpha) + inpaintData.data[i + 2] * alpha);
+      finalData.data[i + 3] = 255;
+    }
+    blendedCtx.putImageData(finalData, 0, 0);
+
+    const finalCanvas = document.createElement("canvas");
+    finalCanvas.width = baseCanvas.width;
+    finalCanvas.height = baseCanvas.height;
+    const finalCtx = finalCanvas.getContext("2d");
+    if (!finalCtx) throw new Error("结果合成失败");
+    finalCtx.drawImage(baseCanvas, 0, 0);
+    finalCtx.drawImage(blendedCanvas, 0, 0, sw, sh, x, y, w, h);
+
+    return await new Promise<Blob>((resolve, reject) => {
+      finalCanvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("输出失败"))), "image/png");
+    });
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error("处理超时");
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function localInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanvasElement) {
   await warmupInpaintWorker();
 
@@ -1318,7 +1453,20 @@ function AiEraser() {
     setError("");
 
     try {
-      const blob = await localInpaint(base, mask);
+      let blob: Blob;
+      try {
+        // Fast path: local IOPaint (10s budget)
+        blob = await iopaintInpaint(base, mask);
+      } catch {
+        // Fallback: legacy local OpenCV path
+        blob = await Promise.race([
+          localInpaint(base, mask),
+          new Promise<Blob>((_, reject) => {
+            setTimeout(() => reject(new Error("处理超时")), 10000);
+          }),
+        ]);
+      }
+
       revokeUrl(resultUrl);
       setResultBlob(blob);
       setResultUrl(URL.createObjectURL(blob));
