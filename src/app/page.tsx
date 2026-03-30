@@ -450,10 +450,6 @@ async function loadOpenCv() {
   return await openCvPromise;
 }
 
-function canvasToPngBase64(canvas: HTMLCanvasElement) {
-  return canvas.toDataURL("image/png").split(",")[1] || "";
-}
-
 async function iopaintInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCanvasElement) {
   const maskCtx = maskCanvas.getContext("2d");
   if (!maskCtx) throw new Error("画布初始化失败");
@@ -525,20 +521,34 @@ async function iopaintInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCan
   const timeout = setTimeout(() => controller.abort(), 9500);
 
   try {
-    const payload = {
-      image: canvasToPngBase64(srcCanvas),
-      mask: canvasToPngBase64(maskCanvas2),
-      hd_strategy: "Original",
-    };
+    const toPngFile = (canvas: HTMLCanvasElement, filename: string) =>
+      new Promise<File>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("图片编码失败"));
+            return;
+          }
+          resolve(new File([blob], filename, { type: "image/png" }));
+        }, "image/png");
+      });
 
-    const resp = await fetch("http://127.0.0.1:8080/api/v1/inpaint", {
+    const imageFile = await toPngFile(srcCanvas, "image.png");
+    const maskFile = await toPngFile(maskCanvas2, "mask.png");
+
+    const fd = new FormData();
+    fd.append("image", imageFile);
+    fd.append("mask", maskFile);
+
+    const resp = await fetch("/api/inpaint", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: fd,
       signal: controller.signal,
     });
 
-    if (!resp.ok) throw new Error("本机 AI 引擎不可用");
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      throw new Error(txt || "云端 AI 引擎不可用");
+    }
 
     const inpaintBlob = await resp.blob();
     const inpaintImg = await loadImage(URL.createObjectURL(inpaintBlob));
