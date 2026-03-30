@@ -4,8 +4,8 @@ const ALIYUN_OBJREMOVE_DOMAIN = "https://objremove.market.alicloudapi.com";
 const SUBMIT_URL = `${ALIYUN_OBJREMOVE_DOMAIN}/api/v1/obj-remove/submit`;
 const QUERY_URL = `${ALIYUN_OBJREMOVE_DOMAIN}/api/v1/obj-remove/query`;
 const TEMP_ASSET_TTL_SEC = 60 * 10;
-const POLL_INTERVAL_MS = 800;
-const POLL_TIMEOUT_MS = 12_000;
+const POLL_INTERVAL_MS = 1200;
+const POLL_TIMEOUT_MS = 45_000;
 
 function getCache(): Cache {
   const c = (globalThis as any).caches as any;
@@ -213,7 +213,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
-        error: "AI 修复超时（阿里云任务未在时限内完成）",
+        error: "AI 修复超时（阿里云任务处理较慢，请缩小涂抹范围后重试）",
         result_key: resultKey,
         code: "ALIYUN_TASK_TIMEOUT",
       },

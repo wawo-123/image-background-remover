@@ -518,7 +518,7 @@ async function iopaintInpaint(baseCanvas: HTMLCanvasElement, maskCanvas: HTMLCan
   const featherData = featherCtx.getImageData(0, 0, sw, sh);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9500);
+  const timeout = setTimeout(() => controller.abort(), 55000);
 
   try {
     const toPngFile = (canvas: HTMLCanvasElement, filename: string) =>
@@ -1414,6 +1414,7 @@ function AiEraser() {
   }
 
   function start(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!event.isPrimary) return;
     const canvas = maskCanvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
@@ -1431,7 +1432,7 @@ function AiEraser() {
   }
 
   function move(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!drawing) return;
+    if (!event.isPrimary || !drawing) return;
     const canvas = maskCanvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
@@ -1443,6 +1444,7 @@ function AiEraser() {
   }
 
   function stop(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!event.isPrimary) return;
     const canvas = maskCanvasRef.current;
     if (canvas && canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
@@ -1553,7 +1555,8 @@ function AiEraser() {
               <canvas
                 ref={maskCanvasRef}
                 className="absolute inset-0 h-full w-full rounded-[1rem]"
-                style={{ touchAction: "none" }}
+                // Allow pinch-zoom (two-finger) on mobile; still draw with single finger via pointer events.
+                style={{ touchAction: "pinch-zoom" }}
                 onPointerDown={start}
                 onPointerMove={move}
                 onPointerUp={stop}
