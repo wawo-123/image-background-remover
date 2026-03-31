@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AuthControls } from "@/components/auth-controls";
 
 type ToolTab = "bg" | "id" | "erase";
 type ItemStatus = "idle" | "uploading" | "success" | "error";
@@ -753,6 +754,7 @@ export default function Home() {
               <h1 className="mt-4 text-3xl font-bold tracking-tight md:text-5xl">图片处理</h1>
               <p className="mt-4 text-sm leading-7 text-slate-200/90 md:text-base">背景消除 · 证件照 · 消除</p>
             </div>
+            <AuthControls />
           </div>
 
           <div className="mt-7 grid gap-3 sm:grid-cols-3">
